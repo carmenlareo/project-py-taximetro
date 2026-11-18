@@ -40,21 +40,18 @@ class VentanaLogin:
 
 
 class VentanaTaximetro:
-    """Interfaz gráfica principal conectada a TaximetroMVP para mantener la consistencia en los logs."""
+    """Interfaz gráfica principal sincronizada con TaximetroMVP."""
     def __init__(self, root):
         self.root = root
         self.root.title("Taxímetro Digital - Panel de Control")
         self.root.geometry("650x550")
         self.root.config(bg="#ffffff")
 
-        # Instancia de la lógica de negocio oficial (Fuente de la verdad y logs)
+        # Instancia de la lógica de negocio oficial (Fuente única de la verdad)
         self.taximetro_logica = TaximetroMVP()
         
-        # Variables de control visual en GUI
+        # Variable de control visual de estado en GUI
         self.carrera_activa = False
-        self.tiempo_segundos = 0
-        self.importe_total = 0.0
-        self.estado_actual = "INACTIVO"
 
         # --- Panel Superior: Estado ---
         self.lbl_estado = tk.Label(root, text="[ESPERA | Sin carrera activa]", font=("Arial", 14, "bold"), bg="#ffeb3b", fg="#333", pady=10)
@@ -87,63 +84,73 @@ class VentanaTaximetro:
         btn_fin = tk.Button(frame_botones, text="🛑 Finalizar", font=("Arial", 12, "bold"), bg="#F44336", fg="white", width=12, height=2, command=self.cmd_fin)
         btn_fin.grid(row=1, column=0, columnspan=3, pady=10, sticky="ew")
 
-        # Bucle de actualización en tiempo real no bloqueante
+        # Bucle de actualización en tiempo real
         self.actualizar_tiempo_real()
 
     def cmd_iniciar(self):
-        # Llama al método real de la lógica para registrar el inicio en el log
         if hasattr(self.taximetro_logica, 'iniciar_carrera'):
             self.taximetro_logica.iniciar_carrera()
         
         self.carrera_activa = True
-        self.tiempo_segundos = 0
-        self.importe_total = 0.0
-        self.estado_actual = "MOVIMIENTO"
         self.lbl_estado.config(text="[EN CURSO | Movimiento]", bg="#00BCD4")
 
     def cmd_parado(self):
         if self.carrera_activa:
-            self.estado_actual = "PARADO"
             if hasattr(self.taximetro_logica, 'cambiar_estado'):
-                self.taximetro_logica.cambiar_estado('parado')
+                self.taximetro_logica.cambiar_estado('PARADO')
             self.lbl_estado.config(text="[PARADO (Tarifa espera)]", bg="#FF9800")
 
     def cmd_movimiento(self):
         if self.carrera_activa:
-            self.estado_actual = "MOVIMIENTO"
             if hasattr(self.taximetro_logica, 'cambiar_estado'):
-                self.taximetro_logica.cambiar_estado('movimiento')
+                self.taximetro_logica.cambiar_estado('MOVIMIENTO')
             self.lbl_estado.config(text="[EN MOVIMIENTO (Tarifa ruta)]", bg="#00BCD4")
 
     def cmd_fin(self):
         if self.carrera_activa:
-            # Llama al método final para cerrar tramos, calcular el total y escribir en taximetro.log
+            # 1. Ejecutamos el cierre oficial en el modelo (calcula el total definitivo y escribe el log)
             if hasattr(self.taximetro_logica, 'finalizar_carrera'):
                 self.taximetro_logica.finalizar_carrera()
             
+            # 2. Extraemos inmediatamente el importe final exacto procesado por el modelo
+            importe_final = getattr(self.taximetro_logica, 'coste_acumulado', 0.0)
+            if callable(importe_final):
+                importe_final = importe_final()
+
+            # 3. Forzamos a la pantalla a mostrar el valor definitivo exacto del log
+            self.lbl_importe.config(text=f"{float(importe_final):.2f} €")
+            
             self.carrera_activa = False
             self.lbl_estado.config(text="[CARRERA FINALIZADA]", bg="#E91E63")
-            messagebox.showinfo("Resumen de Carrera", "La carrera ha finalizado y se ha registrado correctamente en los logs.")
+            messagebox.showinfo("Resumen de Carrera", f"Carrera finalizada con éxito.\nTotal registrado: {float(importe_final):.2f} €")
             
-            # Resetear pantalla
-            self.tiempo_segundos = 0
-            self.importe_total = 0.0
+            # Resetear interfaz visual para la siguiente carrera
             self.lbl_importe.config(text="0.00 €")
             self.lbl_info.config(text="Tiempo: 0s | Distancia: 0.0 km")
             self.lbl_estado.config(text="[ESPERA | Sin carrera activa]", bg="#ffeb3b")
 
     def actualizar_tiempo_real(self):
-        """Actualiza la visualización de la tablet segundo a segundo de forma fluida."""
+        """Ejecuta el cálculo del modelo y actualiza la pantalla segundo a segundo."""
         if self.carrera_activa:
-            self.tiempo_segundos += 1
-            
-            if self.estado_actual == "PARADO":
-                self.importe_total += getattr(self.taximetro_logica, 'TARIFA_PARADO', 0.02)
-            else:
-                self.importe_total += getattr(self.taximetro_logica, 'TARIFA_MOVIMIENTO', 0.05)
+            # Forzamos al modelo a actualizar el tramo transcurrido en este segundo
+            if hasattr(self.taximetro_logica, '_actualizar_tramo'):
+                self.taximetro_logica._actualizar_tramo()
 
-            self.lbl_importe.config(text=f"{self.importe_total:.2f} €")
-            self.lbl_info.config(text=f"Tiempo: {self.tiempo_segundos}s | Distancia: {(self.tiempo_segundos * 0.01):.1f} km")
+            # Extraemos el tiempo total oficial del modelo
+            tiempo = getattr(self.taximetro_logica, 'tiempo_total_carrera', 0)
+            if hasattr(tiempo, 'total_seconds'):
+                tiempo_seg = int(tiempo.total_seconds())
+            else:
+                tiempo_seg = int(tiempo)
+
+            # Extraemos el coste acumulado oficial del modelo
+            importe = getattr(self.taximetro_logica, 'coste_acumulado', 0.0)
+            if callable(importe):
+                importe = importe()
+
+            # Actualizamos los elementos visuales de la tablet
+            self.lbl_importe.config(text=f"{float(importe):.2f} €")
+            self.lbl_info.config(text=f"Tiempo: {tiempo_seg}s | Distancia: {(float(tiempo_seg) * 0.01):.1f} km")
 
         self.root.after(1000, self.actualizar_tiempo_real)
 
